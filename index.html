@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ThunderPlayer</title>
+<style>
+  * { -webkit-box-sizing: border-box; box-sizing: border-box; }
+  body { margin: 0; background: #121212; color: #fff; font-family: Arial, Helvetica, sans-serif; }
+
+  #top { background: #000; padding: 12px 10px 8px 10px; text-align: center; }
+  #top h1 { margin: 0; font-size: 22px; letter-spacing: 1px; }
+  #top h1 span { color: #1db954; }
+  #count { font-size: 12px; color: #888; margin-top: 4px; }
+
+  #searchbox { padding: 10px; }
+  #search { width: 100%; padding: 10px 14px; border: 0; border-radius: 20px;
+            background: #2a2a2a; color: #fff; font-size: 16px; outline: none; }
+
+  #list { padding: 0 0 150px 0; }
+  .msg { padding: 24px; color: #888; text-align: center; }
+  .item { padding: 10px 12px; border-bottom: 1px solid #1f1f1f; cursor: pointer; overflow: hidden; }
+  .item:active { background: #222; }
+  .item.playing { background: #1e1e1e; }
+  .cover { float: left; width: 46px; height: 46px; margin-right: 12px; background: #333;
+           border-radius: 4px; text-align: center; line-height: 46px; font-size: 20px; }
+  .meta { overflow: hidden; }
+  .t { font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .a { font-size: 13px; color: #aaa; margin-top: 3px; }
+  .item.playing .t { color: #1db954; }
+
+  #bar { position: fixed; left: 0; right: 0; bottom: 0; background: #181818;
+         border-top: 1px solid #333; padding: 8px 12px 10px 12px; }
+  #now { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 6px; }
+  #seekrow { overflow: hidden; font-size: 11px; color: #aaa; }
+  #cur { float: left; width: 38px; }
+  #dur { float: right; width: 38px; text-align: right; }
+  #seekwrap { margin: 0 40px; }
+  #seek { width: 100%; }
+  #ctrl { text-align: center; margin-top: 4px; }
+  .btn { display: inline-block; width: 52px; height: 42px; line-height: 42px; margin: 0 6px;
+         background: #2a2a2a; border-radius: 21px; font-size: 20px; cursor: pointer; text-align: center; }
+  .btn.big { width: 64px; background: #1db954; color: #000; }
+</style>
+</head>
+<body>
+
+<div id="top">
+  <h1>Thunder<span>Player</span></h1>
+  <div id="count"></div>
+</div>
+
+<div id="searchbox"><input id="search" type="text" placeholder="Songs suchen..."></div>
+<div id="list"><div class="msg">Lade Songs...</div></div>
+
+<audio id="aud" preload="none"></audio>
+
+<div id="bar">
+  <div id="now">Nichts ausgewählt</div>
+  <div id="seekrow">
+    <span id="cur">0:00</span><span id="dur">0:00</span>
+    <div id="seekwrap"><input id="seek" type="range" min="0" max="1000" value="0"></div>
+  </div>
+  <div id="ctrl">
+    <span class="btn" id="prev">&#9664;&#9664;</span>
+    <span class="btn big" id="play">&#9654;</span>
+    <span class="btn" id="next">&#9654;&#9654;</span>
+  </div>
+</div>
+
+<script>
+/* =====================================================
+   EINSTELLUNG: Link zu deinem GitHub-Ordner (mit / am Ende!)
+   Dort muss songs.json liegen und der Ordner songs/
+
+   Beispiel:
+   https://raw.githubusercontent.com/DEINNAME/DEINREPO/main/
+   ===================================================== */
+var BASE = "https://raw.githubusercontent.com/DEINNAME/DEINREPO/main/";
+var JSON_URL = BASE + "songs.json";
+var SONG_PATH = BASE + "songs/";
+/* ===================================================== */
+
+var songs = [];
+var shown = [];
+var current = -1;
+var seeking = false;
+
+var aud = document.getElementById("aud");
+var listEl = document.getElementById("list");
+var searchEl = document.getElementById("search");
+var seekEl = document.getElementById("seek");
+var playBtn = document.getElementById("play");
+
+function $(id) { return document.getElementById(id); }
+
+function fmt(s) {
+  if (!s || isNaN(s) || s === Infinity) return "0:00";
+  var m = Math.floor(s / 60), r = Math.floor(s % 60);
+  return m + ":" + (r < 10 ? "0" : "") + r;
+}
+
+function esc(t) {
+  return String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function loadJson() {
+  var xhr = new XMLHttpRequest();
+  // Cache-Buster, damit neue Songs sofort erscheinen
+  xhr.open("GET", JSON_URL + "?t=" + new Date().getTime(), true);
+  xhr.onreadystatechange = function () {
+    if (xhr.readyState !== 4) return;
+    if (xhr.status === 200) {
+      try {
+        var data = JSON.parse(xhr.responseText);
+        songs = data.songs || data;
+        $("count").innerHTML = songs.length + " Songs";
+        render();
+      } catch (e) {
+        listEl.innerHTML = '<div class="msg">songs.json ist kaputt.</div>';
+      }
+    } else {
+      listEl.innerHTML = '<div class="msg">songs.json konnte nicht geladen werden (Status ' +
+                         xhr.status + ').<br>BASE-Link in der index.html prüfen!</div>';
+    }
+  };
+  xhr.send();
+}
+
+function render() {
+  var q = searchEl.value.toLowerCase();
+  var html = "";
+  shown = [];
+  for (var i = 0; i < songs.length; i++) {
+    var s = songs[i];
+    if (q === "" || (s.title + " " + s.artist).toLowerCase().indexOf(q) !== -1) {
+      shown.push(i);
+      html += '<div class="item' + (i === current ? " playing" : "") + '" data-i="' + i + '">' +
+              '<div class="cover">&#9835;</div>' +
+              '<div class="meta"><div class="t">' + esc(s.title) + '</div>' +
+              '<div class="a">' + esc(s.artist) + '</div></div></div>';
+    }
+  }
+  if (!shown.length) html = '<div class="msg">Nichts gefunden</div>';
+  listEl.innerHTML = html;
+}
+
+function playSong(i) {
+  if (i < 0 || i >= songs.length) return;
+  current = i;
+  var s = songs[i];
+  aud.src = SONG_PATH + s.filename;
+  aud.load();
+  aud.play();
+  $("now").innerHTML = esc(s.title) + " - " + esc(s.artist);
+  render();
+}
+
+function togglePlay() {
+  if (current === -1) { if (songs.length) playSong(shown.length ? shown[0] : 0); return; }
+  if (aud.paused) aud.play(); else aud.pause();
+}
+
+function step(dir) {
+  if (!shown.length) return;
+  var pos = -1;
+  for (var k = 0; k < shown.length; k++) { if (shown[k] === current) pos = k; }
+  var np = pos + dir;
+  if (np < 0) np = shown.length - 1;
+  if (np >= shown.length) np = 0;
+  playSong(shown[np]);
+}
+
+listEl.onclick = function (e) {
+  var el = e.target || e.srcElement;
+  while (el && el !== listEl) {
+    if (el.getAttribute && el.getAttribute("data-i") !== null) {
+      playSong(parseInt(el.getAttribute("data-i"), 10));
+      return;
+    }
+    el = el.parentNode;
+  }
+};
+
+searchEl.onkeyup = render;
+searchEl.oninput = render;
+playBtn.onclick = togglePlay;
+$("next").onclick = function () { step(1); };
+$("prev").onclick = function () { step(-1); };
+
+aud.onplay = function () { playBtn.innerHTML = "&#10074;&#10074;"; };
+aud.onpause = function () { playBtn.innerHTML = "&#9654;"; };
+aud.onended = function () { step(1); };
+aud.onerror = function () { $("now").innerHTML = "Fehler beim Laden. Link prüfen!"; };
+aud.ontimeupdate = function () {
+  $("cur").innerHTML = fmt(aud.currentTime);
+  $("dur").innerHTML = fmt(aud.duration);
+  if (!seeking && aud.duration) seekEl.value = Math.floor((aud.currentTime / aud.duration) * 1000);
+};
+
+seekEl.onmousedown = seekEl.ontouchstart = function () { seeking = true; };
+seekEl.onchange = function () {
+  if (aud.duration) aud.currentTime = (seekEl.value / 1000) * aud.duration;
+  seeking = false;
+};
+seekEl.ontouchend = seekEl.onmouseup = function () { seeking = false; };
+
+loadJson();
+</script>
+</body>
+</html>
